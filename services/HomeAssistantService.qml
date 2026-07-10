@@ -58,6 +58,10 @@ Singleton {
         PluginService.savePluginData(pluginId, key, value);
     }
 
+    function normalizeBaseUrl(url) {
+        return url.toString().trim().replace(/\/+$/, "");
+    }
+
     function loadEntityOverrides() {
         var data = loadPersistentPluginValue("entityOverrides", {});
         entityOverrides = data || {};
@@ -446,7 +450,7 @@ Singleton {
             return defaultValue;
         }
 
-        hassUrl = load("hassUrl", "http://homeassistant.local:8123");
+        hassUrl = normalizeBaseUrl(load("hassUrl", "http://homeassistant.local:8123"));
         _tokenFromSettings = load("hassToken", "").toString().trim();
         hassTokenPath = load("hassTokenPath", "").toString().trim();
         
@@ -458,12 +462,7 @@ Singleton {
     }
 
     function saveCredentials(url, token) {
-        // Remove trailing slash from URL if present
-        let cleanUrl = url.trim();
-        if (cleanUrl.endsWith("/")) {
-            cleanUrl = cleanUrl.substring(0, cleanUrl.length - 1);
-        }
-        
+        let cleanUrl = normalizeBaseUrl(url);
         PluginService.savePluginData(pluginId, "hassUrl", cleanUrl);
         PluginService.savePluginData(pluginId, "hassToken", token.trim());
         
