@@ -21,9 +21,17 @@ Singleton {
     property string _tokenFromFile: ""
     property string _tokenFromSettings: ""
     property string hassToken: hassTokenPath !== "" ? _tokenFromFile : _tokenFromSettings
+    readonly property string defaultTokenPath: {
+        const configHome = Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config");
+        return configHome + "/DankMaterialShell/secrets/home-assistant.token";
+    }
     property string entityIds: ""
     property int refreshInterval: 3
     property bool showAttributes: false
+    property bool settingsReloadQueued: false
+    property bool statesRequestInFlight: false
+    property bool statesRefreshPending: false
+    property bool statesPendingRefreshCompletion: false
     
     readonly property bool isConfigured: hassUrl !== "" && hassToken !== ""
 
@@ -438,7 +446,7 @@ Singleton {
         onTriggered: reprocessMonitoredEntities()
     }
 
-    function loadSettings() {
+    function loadSettings(shouldRefresh) {
         const load = (key, defaultValue) => {
             const val = PluginService.loadPluginData(pluginId, key);
             return val !== undefined ? val : defaultValue;
@@ -458,16 +466,46 @@ Singleton {
         refreshInterval = load("refreshInterval", 3);
         showAttributes = load("showAttributes", false);
 
-        refresh();
+        if (shouldRefresh !== false) {
+            refresh();
+        }
+    }
+
+    function scheduleSettingsReload() {
+        if (settingsReloadQueued) {
+            return;
+        }
+
+        settingsReloadQueued = true;
+        Qt.callLater(() => {
+            settingsReloadQueued = false;
+            loadSettings(true);
+        });
     }
 
     function saveCredentials(url, token) {
-        let cleanUrl = normalizeBaseUrl(url);
+        const cleanUrl = normalizeBaseUrl(url);
+        const cleanToken = token.toString().trim();
+        const tokenPath = hassTokenPath || defaultTokenPath;
+
+        if (!cleanToken) {
+            console.warn("HomeAssistantMonitor: Refusing to save an empty token");
+            return;
+        }
+
         PluginService.savePluginData(pluginId, "hassUrl", cleanUrl);
-        PluginService.savePluginData(pluginId, "hassToken", token.trim());
-        
-        // Reload settings immediately
-        loadSettings();
+        PluginService.savePluginData(pluginId, "hassTokenPath", tokenPath);
+
+        const writeTokenScript = "umask 077; mkdir -p \"$(dirname \"$1\")\" && printf %s \"$2\" > \"$1\" && chmod 600 \"$1\"";
+        Proc.runCommand(`${pluginId}.saveToken.${Date.now()}`, ["sh", "-c", writeTokenScript, "sh", tokenPath, cleanToken], (stdout, exitCode) => {
+            if (exitCode !== 0) {
+                console.error("HomeAssistantMonitor: Failed to store the token in", tokenPath);
+                return;
+            }
+
+            PluginService.savePluginData(pluginId, "hassToken", "");
+            scheduleSettingsReload();
+        }, 0, 5000);
     }
 
     // Shortcuts Management
@@ -573,7 +611,7 @@ Singleton {
     }
 
     Component.onCompleted: {
-        loadSettings();
+        loadSettings(false);
         loadShortcuts();
         loadEntityOverrides();
         initialize();
@@ -584,8 +622,7 @@ Singleton {
 
         function onPluginDataChanged(changedPluginId) {
             if (changedPluginId === root.pluginId) {
-                // Defer loading settings to avoid potential crash/race conditions
-                Qt.callLater(loadSettings);
+                scheduleSettingsReload();
             }
         }
     }
@@ -983,6 +1020,28 @@ Singleton {
         });
     }
 
+    Component {
+        id: requestRetryTimerComponent
+
+        Timer {
+            repeat: false
+        }
+    }
+
+    function scheduleRequestRetry(method, endpoint, data, callback, retryCount) {
+        const baseDelay = Math.min(10000, 500 * Math.pow(2, retryCount));
+        const jitter = Math.floor(Math.random() * 250);
+        const retryTimer = requestRetryTimerComponent.createObject(root, {
+            interval: baseDelay + jitter
+        });
+
+        retryTimer.triggered.connect(() => {
+            retryTimer.destroy();
+            makeRequest(method, endpoint, data, callback, retryCount + 1);
+        });
+        retryTimer.start();
+    }
+
     function makeRequest(method, endpoint, data, callback, retryCount = 0) {
         if (!hassUrl || !hassToken) {
             console.warn("HomeAssistantMonitor: Missing URL or Token");
@@ -993,23 +1052,37 @@ Singleton {
         const maxRetries = Components.HassConstants.maxRequestRetries;
         var xhr = new XMLHttpRequest();
         var url = hassUrl + endpoint;
+        var settled = false;
+
+        function fail(status, statusText) {
+            if (settled) {
+                return;
+            }
+            settled = true;
+
+            const retryable = status === 0 || status === 408 || status >= 500;
+            if (retryCount < maxRetries && retryable) {
+                console.warn(`HomeAssistantMonitor: ${method} ${endpoint} failed (${status || "network error"}); retrying ${retryCount + 1}/${maxRetries}`);
+                scheduleRequestRetry(method, endpoint, data, callback, retryCount);
+                return;
+            }
+
+            console.error("HomeAssistantMonitor: Request failed", url, status, statusText || "");
+            if (callback) {
+                callback(null, status || -1);
+            }
+        }
         
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 if (xhr.status >= 200 && xhr.status < 300) {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
                     if (callback) callback(xhr.responseText, 0);
                 } else {
-                    console.error("HomeAssistantMonitor: Request failed", url, xhr.status, xhr.statusText);
-                    // Retry on server errors or connection issues (status 0 or 5xx)
-                    // Don't retry on 4xx (client error)
-                    if (retryCount < maxRetries && (xhr.status === 0 || xhr.status >= 500)) {
-                        console.log(`HomeAssistantMonitor: Retrying... (${retryCount + 1}/${maxRetries})`);
-                        Qt.callLater(() => {
-                            makeRequest(method, endpoint, data, callback, retryCount + 1);
-                        });
-                    } else {
-                        if (callback) callback(null, xhr.status || -1);
-                    }
+                    fail(xhr.status, xhr.statusText);
                 }
             }
         }
@@ -1020,15 +1093,11 @@ Singleton {
         xhr.timeout = Components.HassConstants.httpRequestTimeout;
         
         xhr.ontimeout = function() {
-            console.error("HomeAssistantMonitor: Request timed out", url);
-            if (retryCount < maxRetries) {
-                console.log(`HomeAssistantMonitor: Retrying (timeout)... (${retryCount + 1}/${maxRetries})`);
-                Qt.callLater(() => {
-                    makeRequest(method, endpoint, data, callback, retryCount + 1);
-                });
-            } else {
-                if (callback) callback(null, 408); // 408 Request Timeout
-            }
+            fail(408, "Request timed out");
+        }
+
+        xhr.onerror = function() {
+            fail(0, "Network error");
         }
 
         if (data) {
@@ -1119,6 +1188,12 @@ Singleton {
         const parsedEntityIds = parseEntityIds();
         const shouldEmitRefreshCompletion = emitRefreshCompletion === true;
 
+        if (statesRequestInFlight) {
+            statesRefreshPending = true;
+            statesPendingRefreshCompletion = statesPendingRefreshCompletion || shouldEmitRefreshCompletion;
+            return;
+        }
+
         if (!hassUrl || !hassToken) {
             updateEntities([]);
             haAvailable = false;
@@ -1127,7 +1202,14 @@ Singleton {
             return;
         }
 
+        statesRequestInFlight = true;
         makeRequest("GET", "/api/states", null, (stdout, exitCode) => {
+            statesRequestInFlight = false;
+            const runPendingRefresh = statesRefreshPending;
+            const pendingRefreshCompletion = statesPendingRefreshCompletion;
+            statesRefreshPending = false;
+            statesPendingRefreshCompletion = false;
+
             if (exitCode === 0 && stdout) {
                 try {
                     const allStates = JSON.parse(stdout);
@@ -1179,6 +1261,10 @@ Singleton {
                 PluginService.setGlobalVar(pluginId, "haAvailable", false);
                 setConnectionState("offline", "Failed to fetch Home Assistant states");
                 if (shouldEmitRefreshCompletion) refreshCompleted(false);
+            }
+
+            if (runPendingRefresh) {
+                Qt.callLater(() => fetchEntities(pendingRefreshCompletion));
             }
         });
     }
