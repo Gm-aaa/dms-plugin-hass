@@ -1060,7 +1060,7 @@ Singleton {
             }
             settled = true;
 
-            const retryable = status === 0 || status === 408 || status >= 500;
+            const retryable = method === "GET" && (status === 0 || status === 408 || status >= 500);
             if (retryCount < maxRetries && retryable) {
                 console.warn(`HomeAssistantMonitor: ${method} ${endpoint} failed (${status || "network error"}); retrying ${retryCount + 1}/${maxRetries}`);
                 scheduleRequestRetry(method, endpoint, data, callback, retryCount);
