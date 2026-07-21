@@ -16,11 +16,13 @@ Item {
     property var globalEntities: []  // All monitored entities (already includes optimistic states)
     property var pinnedEntityIds: []  // List of pinned entity IDs
     property var customIcons: ({})
+    property var visibilityRules: ({})  // { entityId: { op, value } } — conditional bar visibility
     property real barThickness: 0
     property bool showHomeIcon: true
     property bool showButtonsOnStatusBar: true
 
     property string _lastPinnedIdsStr: ""
+    property int visibleCount: 0        // pinned entities currently passing their visibility rule
 
     // ListModel for efficient incremental updates
     ListModel {
@@ -30,6 +32,19 @@ Item {
     // Sync model when data changes
     onGlobalEntitiesChanged: syncModel()
     onPinnedEntityIdsChanged: syncModel()
+    onVisibilityRulesChanged: recomputeVisibleCount()
+
+    // Count pinned entities that currently pass their visibility rule. Called on every
+    // model mutation so the "nothing to show" fallback stays correct.
+    function recomputeVisibleCount() {
+        const rules = visibilityRules || {};
+        var c = 0;
+        for (var i = 0; i < pinnedEntitiesModel.count; i++) {
+            const m = pinnedEntitiesModel.get(i);
+            if (EntityHelper.entityVisible(m, rules[m.entityId])) c++;
+        }
+        visibleCount = c;
+    }
 
     // Listen for entity data changes from HomeAssistantService (unified signal)
     Connections {
@@ -63,6 +78,7 @@ Item {
         const normalized = normalizeEntity(entityData);
         if (normalized) {
             pinnedEntitiesModel.set(index, normalized);
+            recomputeVisibleCount();
         }
     }
 
@@ -74,6 +90,7 @@ Item {
                 pinnedEntitiesModel.append(normalized);
             }
         }
+        recomputeVisibleCount();
     }
 
     function syncModel() {
@@ -131,7 +148,7 @@ Item {
             entityCount: root.entityCount
             showHomeIcon: root.showHomeIcon
             anchors.verticalCenter: parent.verticalCenter
-            visible: !root.haAvailable || pinnedEntitiesModel.count === 0
+            visible: !root.haAvailable || root.visibleCount === 0
         }
 
         Repeater {
@@ -161,7 +178,7 @@ Item {
             entityCount: root.entityCount
             showHomeIcon: root.showHomeIcon
             anchors.horizontalCenter: parent.horizontalCenter
-            visible: pinnedEntitiesModel.count === 0
+            visible: root.visibleCount === 0
         }
 
         Repeater {
@@ -184,6 +201,8 @@ Item {
         Item {
             implicitWidth: root.orientation === Qt.Vertical ? root.barThickness : entityRowContent.implicitWidth
             implicitHeight: root.orientation === Qt.Vertical ? entityColumnContent.implicitHeight : root.barThickness
+            // Conditional visibility (Row/Column positioners collapse invisible children).
+            visible: EntityHelper.entityVisible(model, (root.visibilityRules || {})[model.entityId])
             readonly property bool availabilityIssue: model.state === "unavailable" || model.state === "unknown"
             readonly property color stateColor: availabilityIssue ? Theme.warning : HassConstants.getStateColor(model.domain || "", model.state || "", Theme)
 

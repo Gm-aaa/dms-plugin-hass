@@ -20,6 +20,7 @@ Column {
     property var showEntityDetails: ({})
     property bool showAttributes: true
     property var customIcons: ({})
+    property var visibilityRules: ({})
 
     signal requestListView(ListView listView)
     signal requestToggleExpand(string entityId)
@@ -27,6 +28,7 @@ Column {
     signal requestToggleDetails(string entityId)
     signal requestRemoveEntity(string entityId)
     signal requestOpenIconPicker(string entityId)
+    signal requestSetVisibility(string entityId, var rule)
 
     width: parent ? parent.width : implicitWidth
     height: parent ? parent.height : implicitHeight
@@ -112,6 +114,7 @@ Column {
                 detailsExpanded: rowEntityData ? (root.showEntityDetails[rowEntityData.entityId] || false) : false
                 showAttributes: root.showAttributes
                 customIcons: root.customIcons
+                visibilityRule: rowEntityData ? (root.visibilityRules[rowEntityData.entityId] || null) : null
                 isEditing: root.isEditing
 
                 onToggleExpand: if (rowEntityData) root.requestToggleExpand(rowEntityData.entityId)
@@ -119,6 +122,7 @@ Column {
                 onToggleDetails: if (rowEntityData) root.requestToggleDetails(rowEntityData.entityId)
                 onRemoveEntity: if (rowEntityData) root.requestRemoveEntity(rowEntityData.entityId)
                 onOpenIconPicker: if (rowEntityData) root.requestOpenIconPicker(rowEntityData.entityId)
+                onSetVisibility: rule => { if (rowEntityData) root.requestSetVisibility(rowEntityData.entityId, rule) }
             }
         }
 

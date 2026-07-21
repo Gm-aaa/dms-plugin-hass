@@ -48,6 +48,7 @@ StyledRect {
     property bool isEditing: false
     property bool isRenaming: false
     property string _renameBaseline: ""
+    property var visibilityRule: null   // { op, value } or null (= always shown on bar)
 
     onIsEditingChanged: if (!isEditing) isRenaming = false
 
@@ -56,6 +57,7 @@ StyledRect {
     signal toggleDetails()
     signal removeEntity()
     signal openIconPicker()
+    signal setVisibility(var rule)   // null clears (always visible)
 
     function _getEffectiveState() {
         return EntityHelper.getEffectiveState(entityData);
@@ -452,6 +454,20 @@ StyledRect {
             backgroundOpacity: isPinned ? 0.3 : 0.7
             iconRotation: isPinned ? 0 : 45
             onClicked: entityCard.togglePin()
+        }
+
+        EditActionButton {
+            width: 32
+            height: 32
+            readonly property bool showWhenActive: !!(entityCard.visibilityRule && entityCard.visibilityRule.op === "active")
+            // Toggle: always shown  <->  only shown on the bar when the entity is "active"
+            // (state is not off/idle/none/closed/empty). Full op set lives in EntityHelper.entityVisible.
+            iconName: showWhenActive ? "filter_alt" : "visibility"
+            iconSize: 16
+            iconColor: showWhenActive ? (Theme.primary || "transparent") : Theme.surfaceText
+            backgroundColor: showWhenActive ? (Theme.primary || "transparent") : (Theme.surfaceContainerHigh || "transparent")
+            backgroundOpacity: showWhenActive ? 0.3 : 0.7
+            onClicked: entityCard.setVisibility(showWhenActive ? null : { "op": "active" })
         }
 
         EditActionButton {
