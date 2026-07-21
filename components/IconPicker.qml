@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Io
 import qs.Common
 import qs.Widgets
 
@@ -9,6 +10,26 @@ Rectangle {
     property string searchText: ""
     property var customIcons: ({})
     property var commonIcons: []
+
+    // Full Material Symbols catalog, loaded from the codepoints file vendored with this
+    // plugin (assets/material-symbols-rounded.codepoints). Falls back to commonIcons if
+    // the file can't be read. Names match the Rounded variable font DankIcon renders.
+    property var allIcons: []
+    readonly property var iconSource: allIcons.length > 0 ? allIcons : commonIcons
+
+    FileView {
+        path: Qt.resolvedUrl("../assets/material-symbols-rounded.codepoints").toString().replace(/^file:\/\//, "")
+        blockLoading: false
+        onLoaded: {
+            const lines = text().split('\n');
+            const names = [];
+            for (let i = 0; i < lines.length; i++) {
+                const name = lines[i].trim().split(' ')[0];
+                if (name) names.push(name);
+            }
+            root.allIcons = names;
+        }
+    }
 
     signal iconSelected(string iconName)
     signal resetIcon()
@@ -192,8 +213,8 @@ Rectangle {
 
             model: {
                 const search = root.searchText.toLowerCase();
-                if (!search) return root.commonIcons;
-                return root.commonIcons.filter(icon => icon.toLowerCase().includes(search));
+                if (!search) return root.iconSource;
+                return root.iconSource.filter(icon => icon.toLowerCase().includes(search));
             }
 
             delegate: Rectangle {
