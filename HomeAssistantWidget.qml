@@ -14,6 +14,7 @@ PluginComponent {
     property bool showAttributes: pluginData.showAttributes !== undefined ? pluginData.showAttributes : true
     property var pinnedEntities: []
     property var customIcons: ({})
+    property var visibilityRules: ({})   // { entityId: { op, value } } — conditional bar visibility
 
     // Cache for status bar - use computed properties to ensure proper scope
     readonly property var cachedGlobalEntities: globalEntities.value || []
@@ -203,6 +204,7 @@ PluginComponent {
     Component.onCompleted: {
         syncPinnedEntitiesFromStorage();
         customIcons = loadPersistentUiValue("customIcons", ({}));
+        visibilityRules = loadPersistentUiValue("entityVisibility", ({}));
         syncSelectionState();
     }
 
@@ -500,6 +502,18 @@ PluginComponent {
         savePersistentUiValue("customIcons", icons);
     }
 
+    // rule = { op: "always"|"active"|"eq"|"ne"|"gt"|"lt", value } — pass null/"always" to clear.
+    function setEntityVisibility(entityId, rule) {
+        var rules = Object.assign({}, visibilityRules);
+        if (rule && rule.op && rule.op !== "always") {
+            rules[entityId] = rule;
+        } else {
+            delete rules[entityId];
+        }
+        visibilityRules = rules;
+        savePersistentUiValue("entityVisibility", rules);
+    }
+
     function openIconPicker(entityId) {
         iconPickerEntityId = entityId;
         iconSearchText = "";
@@ -519,6 +533,7 @@ PluginComponent {
         globalEntities: root.cachedGlobalEntities
         pinnedEntityIds: root.cachedPinnedEntities
         customIcons: root.customIcons
+        visibilityRules: root.visibilityRules
         barThickness: root.barThickness
         showHomeIcon: pluginData.showHomeIcon !== undefined ? pluginData.showHomeIcon : true
         showButtonsOnStatusBar: pluginData.showButtonsOnStatusBar !== undefined ? pluginData.showButtonsOnStatusBar : true
@@ -533,6 +548,7 @@ PluginComponent {
         globalEntities: root.cachedGlobalEntities
         pinnedEntityIds: root.cachedPinnedEntities
         customIcons: root.customIcons
+        visibilityRules: root.visibilityRules
         barThickness: root.barThickness
         showHomeIcon: pluginData.showHomeIcon !== undefined ? pluginData.showHomeIcon : true
         showButtonsOnStatusBar: pluginData.showButtonsOnStatusBar !== undefined ? pluginData.showButtonsOnStatusBar : true
@@ -679,6 +695,7 @@ PluginComponent {
                         showEntityDetails: root.showEntityDetails
                         showAttributes: root.showAttributes
                         customIcons: root.customIcons
+                        visibilityRules: root.visibilityRules
 
                         onRequestListView: listView => root.entityListView = listView
                         onRequestToggleExpand: entityId => root.toggleEntity(entityId)
@@ -686,6 +703,7 @@ PluginComponent {
                         onRequestToggleDetails: entityId => root.toggleEntityDetails(entityId)
                         onRequestRemoveEntity: entityId => HomeAssistantService.removeEntityFromMonitor(entityId)
                         onRequestOpenIconPicker: entityId => root.openIconPicker(entityId)
+                        onRequestSetVisibility: (entityId, rule) => root.setEntityVisibility(entityId, rule)
                     }
                 }
             }

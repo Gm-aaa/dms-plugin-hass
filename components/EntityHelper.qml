@@ -130,4 +130,44 @@ QtObject {
             theme
         );
     }
+
+    /**
+     * Decide whether a pinned entity should be shown on the bar, per a visibility rule.
+     * rule = { op: "always"|"active"|"eq"|"ne"|"gt"|"lt", value: <string|number> }
+     * A missing or "always" rule => always visible (backwards compatible).
+     * "active" = the state is "meaningful" — not in a set of empty/off-like values
+     * (off, idle, none, closed, standby, unavailable, unknown, 0, ""). This suits bar
+     * display (e.g. a countdown "12m" shows, "off" hides) and also covers on/open/playing.
+     * "gt"/"lt" compare the leading number of the state (e.g. "12m" -> 12);
+     * a non-numeric state => hidden.
+     * @param entityData - The entity data object
+     * @param rule - The visibility rule for this entity (may be undefined)
+     * @returns true if the entity should be shown
+     */
+    readonly property var _inactiveStates: ["", "0", "off", "idle", "none", "closed",
+        "standby", "unavailable", "unknown", "false", "not_home", "disconnected", "paused"]
+
+    function entityVisible(entityData, rule) {
+        if (!entityData) return false;
+        if (!rule || !rule.op || rule.op === "always") return true;
+
+        const state = getEffectiveState(entityData);
+        switch (rule.op) {
+        case "active":
+            return _inactiveStates.indexOf(String(state).trim().toLowerCase()) === -1;
+        case "eq":
+            return String(state) === String(rule.value);
+        case "ne":
+            return String(state) !== String(rule.value);
+        case "gt":
+        case "lt": {
+            const n = parseFloat(state);
+            const v = parseFloat(rule.value);
+            if (isNaN(n) || isNaN(v)) return false;
+            return rule.op === "gt" ? (n > v) : (n < v);
+        }
+        default:
+            return true;
+        }
+    }
 }
