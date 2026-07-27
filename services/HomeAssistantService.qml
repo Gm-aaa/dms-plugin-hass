@@ -441,7 +441,7 @@ Singleton {
 
     Timer {
         id: batchUpdateTimer
-        interval: 100
+        interval: 200
         repeat: false
         onTriggered: reprocessMonitoredEntities()
     }
@@ -635,7 +635,7 @@ Singleton {
     }
 
     property var refreshTimer: Timer {
-        interval: root.refreshInterval * 1000
+        interval: Math.max(15, root.refreshInterval) * 1000
         // Only run polling if WebSocket is NOT connected and we are configured
         running: (!socket || socket.status !== root.wsOpen) && root.isConfigured
         repeat: true
