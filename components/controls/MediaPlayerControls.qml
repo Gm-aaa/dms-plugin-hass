@@ -13,6 +13,46 @@ Column {
 
     required property var entityData
 
+    property string coverArtUrl: {
+        const pic = root.getVal("entity_picture", "");
+        if (!pic) return "";
+        if (pic.startsWith("http")) return pic;
+        return HomeAssistantService.hassUrl + pic;
+    }
+    property string localCoverArt: ""
+    property bool coverArtDownloadInFlight: false
+    property int coverArtSeq: 0
+
+    onCoverArtUrlChanged: {
+        localCoverArt = "";
+        coverArtDownloadInFlight = false;
+    }
+
+    // QML Image cannot send auth headers; re-fetch protected artwork via curl
+    function downloadCoverArt() {
+        if (!coverArtUrl || coverArtDownloadInFlight || !HomeAssistantService.hassToken)
+            return;
+        coverArtDownloadInFlight = true;
+        const requestedUrl = coverArtUrl;
+        const safeId = String(entityData.entityId).replace(/[^A-Za-z0-9_.-]/g, "_");
+        const prevPath = localCoverArt ? localCoverArt.replace(/^file:\/\//, "") : "";
+        coverArtSeq++;
+        const dest = "/tmp/dms-hass-cover-" + safeId + "-" + coverArtSeq + ".img";
+        Proc.runCommand("homeAssistantMonitor.coverArt." + safeId, [
+            "curl", "-fsSL", "--max-time", "10",
+            "-H", "Authorization: Bearer " + HomeAssistantService.hassToken,
+            "-o", dest, requestedUrl
+        ], (stdout, exitCode) => {
+            coverArtDownloadInFlight = false;
+            if (exitCode !== 0 || requestedUrl !== root.coverArtUrl)
+                return;
+            if (prevPath)
+                Proc.runCommand("homeAssistantMonitor.coverArtCleanup." + safeId,
+                                ["rm", "-f", "--", prevPath], () => {});
+            localCoverArt = "file://" + dest;
+        });
+    }
+
     function getVal(attr, def) {
         return EntityHelper.getEffectiveValue(entityData, attr, def);
     }
@@ -39,15 +79,14 @@ Column {
             Image {
                 id: coverImage
                 anchors.fill: parent
-                source: {
-                    const pic = root.getVal("entity_picture", "");
-                    if (!pic) return "";
-                    if (pic.startsWith("http")) return pic;
-                    // Append HA base URL
-                    return HomeAssistantService.hassUrl + pic;
-                }
+                source: root.localCoverArt || root.coverArtUrl
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
+                onStatusChanged: {
+                    if (status === Image.Error && !root.localCoverArt &&
+                        root.coverArtUrl.startsWith(HomeAssistantService.hassUrl))
+                        root.downloadCoverArt();
+                }
             }
         }
 

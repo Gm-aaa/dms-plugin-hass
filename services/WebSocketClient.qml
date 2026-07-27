@@ -40,11 +40,11 @@ Item {
     function reconnect() {
         // Force a reconnection by toggling the internal active property
         // This doesn't break the external binding
-        const wasActive = _internalActive;
+        if (!root.active) return;
         _internalActive = false;
         // Use a small delay to ensure the disconnect is processed
         Qt.callLater(() => {
-            _internalActive = wasActive;
+            _internalActive = root.active;
         });
     }
 }

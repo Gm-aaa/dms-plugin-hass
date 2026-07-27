@@ -19,6 +19,7 @@ Item {
 
     property real visualValue: value
     property bool isDragging: false
+    property real valueAtPress: value
 
     onValueChanged: {
         if (!isDragging)
@@ -114,17 +115,19 @@ Item {
 
                 onPressed: (mouse) => {
                     root.isDragging = true;
-                    root.updateValue(mouse.x, width);
+                    root.valueAtPress = root.visualValue;
+                    root.updateValue(mouse.x - (width - track.width) / 2, track.width);
                 }
 
                 onPositionChanged: (mouse) => {
                     if (pressed)
-                        root.updateValue(mouse.x, width);
+                        root.updateValue(mouse.x - (width - track.width) / 2, track.width);
                 }
 
                 onReleased: {
                     root.isDragging = false;
-                    root.dragFinished(root.visualValue);
+                    if (root.visualValue !== root.valueAtPress)
+                        root.dragFinished(root.visualValue);
                 }
             }
         }

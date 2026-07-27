@@ -73,14 +73,10 @@ StyledRect {
         const deviceName = HomeAssistantService.entityToDeviceCache[entityData.entityId];
         if (!deviceName) { relatedEntities = []; return; }
         const deviceEntityIds = HomeAssistantService.devicesCache[deviceName] || [];
-        const all = globalAllEntities.value || [];
-        const entityMap = {};
-        for (const e of all)
-            entityMap[e.entityId] = e;
         relatedEntities = deviceEntityIds
             .filter((id) => id !== entityData.entityId)
-            .map((id) => entityMap[id])
-            .filter((e) => e !== undefined);
+            .map((id) => HomeAssistantService.getCachedEntity(id))
+            .filter((e) => e !== null && e !== undefined);
     }
 
     function _hasControls() {
@@ -233,12 +229,6 @@ StyledRect {
     }
 
     height: baseHeight + (isExpanded && hasControls ? Theme.spacingM + controlsLoader.height : 0) + (isExpanded ? Theme.spacingM + expandedContent.height : 0)
-
-    PluginGlobalVar {
-        id: globalAllEntities
-        varName: "allEntities"
-        defaultValue: []
-    }
 
     Timer {
         id: pendingDotsTimer

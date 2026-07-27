@@ -75,31 +75,29 @@ Singleton {
         entityOverrides = data || {};
     }
 
-    function findCachedEntityIndex(entityId) {
-        if (!cachedAllEntities) return -1;
-        for (let i = 0; i < cachedAllEntities.length; i++) {
-            if (cachedAllEntities[i].entityId === entityId) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
     function getCachedEntity(entityId) {
-        const index = findCachedEntityIndex(entityId);
-        return index >= 0 ? cachedAllEntities[index] : null;
+        const index = cachedEntityIndex[entityId];
+        return index !== undefined ? cachedAllEntities[index] : null;
     }
 
     function upsertCachedEntity(entity) {
         if (!entity) return;
-        const nextEntities = Array.from(cachedAllEntities || []);
-        const index = findCachedEntityIndex(entity.entityId);
-        if (index >= 0) {
-            nextEntities[index] = entity;
+        const index = cachedEntityIndex[entity.entityId];
+        if (index !== undefined) {
+            // In place: consumers read the cache on demand, no notification needed
+            cachedAllEntities[index] = entity;
         } else {
-            nextEntities.push(entity);
+            cachedAllEntities.push(entity);
+            cachedEntityIndex[entity.entityId] = cachedAllEntities.length - 1;
         }
-        cachedAllEntities = nextEntities;
+    }
+
+    function rebuildCachedEntityIndex() {
+        const idx = {};
+        for (let i = 0; i < cachedAllEntities.length; i++) {
+            idx[cachedAllEntities[i].entityId] = i;
+        }
+        cachedEntityIndex = idx;
     }
 
     function applyOptimisticState(entity) {
@@ -161,7 +159,8 @@ Singleton {
             if (cachedEntity) {
                 upsertCachedEntity(Object.assign({}, cachedEntity, { friendlyName: newName }));
             }
-            PluginService.setGlobalVar(pluginId, "allEntities", cachedAllEntities);
+            // New reference: the cache is updated in place, subscribers need a change signal
+            PluginService.setGlobalVar(pluginId, "allEntities", Array.from(cachedAllEntities));
             reprocessMonitoredEntities(); // This pushes changes to global "entities" var
         }
         
@@ -190,6 +189,8 @@ Singleton {
     readonly property int maxReconnectInterval: Components.HassConstants.maxReconnectInterval
     property bool wsAuthenticated: false
     property bool suppressReconnect: false
+    // Declarative socket kill-switch: imperative socket.active writes would destroy the Binding
+    property bool wsAuthFailed: false
     property var entityActionStates: ({})
 
     function clearCallbacks(reason) {
@@ -343,7 +344,7 @@ Singleton {
         Binding {
             target: wsLoader.item
             property: "active"
-            value: !!root.hassUrl && !!root.hassToken
+            value: !!root.hassUrl && !!root.hassToken && !root.wsAuthFailed
             when: wsLoader.status === Loader.Ready
         }
         
@@ -461,6 +462,7 @@ Singleton {
         hassUrl = normalizeBaseUrl(load("hassUrl", "http://homeassistant.local:8123"));
         _tokenFromSettings = load("hassToken", "").toString().trim();
         hassTokenPath = load("hassTokenPath", "").toString().trim();
+        wsAuthFailed = false;
         
         entityIds = loadState("entityIds", load("entityIds", ""));
         refreshInterval = load("refreshInterval", 3);
@@ -653,7 +655,7 @@ Singleton {
     }
 
     onRefreshIntervalChanged: {
-        refreshTimer.interval = refreshInterval * 1000;
+        // The interval binding (with the 15s floor) updates automatically; just restart
         if (refreshTimer.running) {
             refreshTimer.restart();
         }
@@ -747,7 +749,7 @@ Singleton {
             setConnectionState("auth_error", data.message || "Authentication failed");
             suppressReconnect = true;
             pingTimer.stop();
-            socket.active = false;
+            wsAuthFailed = true;
         } else if (data.type === "event") {
             if (data.event.event_type === "state_changed") {
                 const eventData = data.event.data;
@@ -779,6 +781,7 @@ Singleton {
          }
 
          cachedAllEntities = allEntities;
+         rebuildCachedEntityIndex();
          PluginService.setGlobalVar(pluginId, "allEntities", allEntities);
          const monitoredEntities = buildMonitoredEntities(parsedEntityIds, buildEntityMap(allEntities));
 
@@ -929,6 +932,7 @@ Singleton {
         // Remove from cachedAllEntities
         const oldLen = cachedAllEntities.length;
         cachedAllEntities = cachedAllEntities.filter(e => e.entityId !== entityId);
+        rebuildCachedEntityIndex();
         
         if (oldLen !== cachedAllEntities.length) {
             // Trigger batch update to refresh UI lists
@@ -1054,11 +1058,25 @@ Singleton {
         var url = hassUrl + endpoint;
         var settled = false;
 
+        // QML XMLHttpRequest has no timeout support; enforce one with a Timer + abort()
+        var timeoutTimer = requestRetryTimerComponent.createObject(root, {
+            interval: Components.HassConstants.httpRequestTimeout
+        });
+
+        function settle() {
+            if (timeoutTimer) {
+                timeoutTimer.stop();
+                timeoutTimer.destroy();
+                timeoutTimer = null;
+            }
+        }
+
         function fail(status, statusText) {
             if (settled) {
                 return;
             }
             settled = true;
+            settle();
 
             const retryable = method === "GET" && (status === 0 || status === 408 || status >= 500);
             if (retryCount < maxRetries && retryable) {
@@ -1080,6 +1098,7 @@ Singleton {
                         return;
                     }
                     settled = true;
+                    settle();
                     if (callback) callback(xhr.responseText, 0);
                 } else {
                     fail(xhr.status, xhr.statusText);
@@ -1090,11 +1109,12 @@ Singleton {
         xhr.open(method, url);
         xhr.setRequestHeader("Authorization", "Bearer " + hassToken);
         xhr.setRequestHeader("Content-Type", "application/json");
-        xhr.timeout = Components.HassConstants.httpRequestTimeout;
-        
-        xhr.ontimeout = function() {
+
+        timeoutTimer.triggered.connect(() => {
             fail(408, "Request timed out");
-        }
+            xhr.abort();
+        });
+        timeoutTimer.start();
 
         xhr.onerror = function() {
             fail(0, "Network error");
@@ -1174,6 +1194,7 @@ Singleton {
 
     // Cache for all entities to avoid re-fetching on local updates
     property var cachedAllEntities: []
+    property var cachedEntityIndex: ({})
 
     function parseEntityIds() {
         if (!entityIds || entityIds.trim() === "") {
@@ -1225,6 +1246,7 @@ Singleton {
                     }
 
                     cachedAllEntities = allEntities;
+                    rebuildCachedEntityIndex();
 
                     PluginService.setGlobalVar(pluginId, "allEntities", allEntities);
                     const monitoredEntities = buildMonitoredEntities(parsedEntityIds, buildEntityMap(allEntities));
@@ -1251,7 +1273,7 @@ Singleton {
                     PluginService.setGlobalVar(pluginId, "haAvailable", false);  // Notify UI immediately
                     setConnectionState("offline", "Failed to parse Home Assistant response");
                     // Keep old data, don't clear (consistent with network failure handling)
-                    updateEntities(cachedAllEntities);
+                    updateEntities(buildMonitoredEntities(parsedEntityIds, buildEntityMap(cachedAllEntities)));
                     if (shouldEmitRefreshCompletion) refreshCompleted(false);
                 }
             } else {
@@ -1365,16 +1387,17 @@ Singleton {
 
     function callService(domain, service, entityId, serviceData) {
         if (canUseWebSocketApi()) {
+            const payload = Object.assign({}, serviceData);
+            if (entityId) {
+                payload.entity_id = entityId;
+            }
+
             const msg = {
                 type: "call_service",
                 domain: domain,
                 service: service,
-                service_data: serviceData || {}
+                service_data: payload
             };
-            
-            if (entityId) {
-                msg.service_data.entity_id = entityId;
-            }
 
             if (entityId) {
                 setEntityActionState(entityId, "pending", service, "", "request");
@@ -1414,8 +1437,10 @@ Singleton {
         }
 
         const endpoint = `/api/services/${domain}/${service}`;
-        const data = serviceData || {};
-        data.entity_id = entityId;
+        const data = Object.assign({}, serviceData);
+        if (entityId) {
+            data.entity_id = entityId;
+        }
 
         if (entityId) {
             setEntityActionState(entityId, "pending", service, "", "request");
@@ -1785,11 +1810,6 @@ Singleton {
                 for (var i = 0; i < resolvedEntities.length; i++) {
                     pendingConfirmationResolved(resolvedEntities[i]);
                 }
-            }
-
-            if (Object.keys(pendingConfirmations).length === 0) {
-                running = false;
-                pendingConfirmations = {};
             }
         }
     }
