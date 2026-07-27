@@ -439,9 +439,27 @@ Singleton {
         }
     }
 
+    property bool allEntitiesRequested: false
+
+    function setAllEntitiesRequested(requested) {
+        allEntitiesRequested = !!requested;
+        if (allEntitiesRequested && canUseWebSocketApi()) {
+            refresh();
+        }
+    }
+
+    function isEntityRelevant(entityId) {
+        if (!entityId) return false;
+        const parsedIds = parseEntityIds();
+        if (parsedIds.indexOf(entityId) >= 0) return true;
+        if (pendingConfirmations[entityId] || optimisticStates[entityId] || entityActionStates[entityId] || isShortcut(entityId)) return true;
+        if (allEntitiesRequested) return true;
+        return false;
+    }
+
     Timer {
         id: batchUpdateTimer
-        interval: 100
+        interval: 200
         repeat: false
         onTriggered: reprocessMonitoredEntities()
     }
@@ -635,11 +653,11 @@ Singleton {
     }
 
     property var refreshTimer: Timer {
-        interval: root.refreshInterval * 1000
+        interval: Math.max(15, root.refreshInterval) * 1000
         // Only run polling if WebSocket is NOT connected and we are configured
         running: (!socket || socket.status !== root.wsOpen) && root.isConfigured
         repeat: true
-        onTriggered: fetchEntities()
+        onTriggered: fetchEntities(false, false)
     }
 
     property var monitoredEntitiesSyncTimer: Timer {
@@ -791,6 +809,9 @@ Singleton {
     }
 
     function processWsEntityUpdate(entity) {
+        if (!entity || !entity.entity_id) return;
+        if (!isEntityRelevant(entity.entity_id)) return;
+
         const mapped = mapEntity(entity);
         if (!mapped) return;
 
@@ -1184,9 +1205,51 @@ Singleton {
             .filter(id => id.length > 0);
     }
 
-    function fetchEntities(emitRefreshCompletion) {
+    function fetchMonitoredEntitiesRest(parsedEntityIds, shouldEmitRefreshCompletion) {
+        if (!parsedEntityIds || parsedEntityIds.length === 0) {
+            if (shouldEmitRefreshCompletion) refreshCompleted(true);
+            return;
+        }
+
+        statesRequestInFlight = true;
+        let completedCount = 0;
+        let hasError = false;
+
+        for (let i = 0; i < parsedEntityIds.length; i++) {
+            const id = parsedEntityIds[i];
+            makeRequest("GET", "/api/states/" + id, null, (stdout, exitCode) => {
+                completedCount++;
+                if (exitCode === 0 && stdout) {
+                    try {
+                        const stateObj = JSON.parse(stdout);
+                        const mapped = mapEntity(stateObj);
+                        if (mapped) {
+                            upsertCachedEntity(mapped);
+                        }
+                    } catch (e) {
+                        hasError = true;
+                    }
+                } else {
+                    hasError = true;
+                }
+
+                if (completedCount === parsedEntityIds.length) {
+                    statesRequestInFlight = false;
+                    haAvailable = !hasError || (cachedAllEntities && cachedAllEntities.length > 0);
+                    if (!canUseWebSocketApi()) {
+                        setConnectionState("degraded", "Using REST fallback");
+                    }
+                    reprocessMonitoredEntities();
+                    if (shouldEmitRefreshCompletion) refreshCompleted(!hasError);
+                }
+            });
+        }
+    }
+
+    function fetchEntities(emitRefreshCompletion, forceFull) {
         const parsedEntityIds = parseEntityIds();
         const shouldEmitRefreshCompletion = emitRefreshCompletion === true;
+        const isForceFull = forceFull === true;
 
         if (statesRequestInFlight) {
             statesRefreshPending = true;
@@ -1199,6 +1262,12 @@ Singleton {
             haAvailable = false;
             PluginService.setGlobalVar(pluginId, "haAvailable", false);  // Notify UI immediately
             if (shouldEmitRefreshCompletion) refreshCompleted(false);
+            return;
+        }
+
+        // Lightweight REST fallback: if not forced full fetch, not requested all entities and has monitored IDs, only fetch monitored entities
+        if (!isForceFull && !canUseWebSocketApi() && !allEntitiesRequested && parsedEntityIds.length > 0) {
+            fetchMonitoredEntitiesRest(parsedEntityIds, shouldEmitRefreshCompletion);
             return;
         }
 

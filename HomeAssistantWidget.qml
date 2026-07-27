@@ -257,6 +257,10 @@ PluginComponent {
         root.keyboardNavigationActive = false;
     }
 
+    onShowEntityBrowserChanged: {
+        HomeAssistantService.setAllEntitiesRequested(showEntityBrowser);
+    }
+
     function toggleEntityBrowser() {
         root.showEntityBrowser = !root.showEntityBrowser;
         if (!root.showEntityBrowser) {
