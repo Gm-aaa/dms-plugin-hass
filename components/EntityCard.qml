@@ -166,7 +166,7 @@ StyledRect {
                 HomeAssistantService.callService("media_player", "media_play", entityId, {});
         } else if (domain === "climate") {
             const hvacModes = entityData.attributes && entityData.attributes.hvac_modes || ["off", "heat"];
-            const nextState = state === "off" ? (hvacModes.includes("heat") ? "heat" : hvacModes.find((m) => m !== "off") || "heat") : "off";
+            const nextState = state === "off" ? HomeAssistantService.getLastHvacMode(entityId, hvacModes) : "off";
             HomeAssistantService.setOptimisticState(entityId, "state", nextState);
             HomeAssistantService.setHvacMode(entityId, nextState);
         } else {

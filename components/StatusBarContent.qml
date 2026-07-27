@@ -326,7 +326,7 @@ Item {
         } else if (domain === "climate") {
             var hvacModes = modelData.attributes && modelData.attributes.hvac_modes || ["off", "heat"];
             nextState = state === "off"
-                ? (hvacModes.includes("heat") ? "heat" : hvacModes.find(m => m !== "off") || "heat")
+                ? HomeAssistantService.getLastHvacMode(id, hvacModes)
                 : "off";
             HomeAssistantService.setHvacMode(id, nextState);
         } else {

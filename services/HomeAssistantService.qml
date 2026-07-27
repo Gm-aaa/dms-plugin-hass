@@ -777,6 +777,8 @@ Singleton {
              const mapped = mapEntity(entity);
              if (mapped) {
                  allEntities.push(mapped);
+                 if (mapped.entityId.indexOf("climate.") === 0)
+                     rememberHvacMode(mapped.entityId, mapped.state);
              }
          }
 
@@ -799,6 +801,8 @@ Singleton {
 
         const entityId = mapped.entityId;
         const actualState = mapped.state;
+        if (entityId.indexOf("climate.") === 0)
+            rememberHvacMode(entityId, actualState);
         clearEntityActionState(entityId);
 
         // Check if we have a pending confirmation for this entity
@@ -1570,6 +1574,7 @@ Singleton {
     }
 
     function setHvacMode(entityId, mode) {
+        rememberHvacMode(entityId, mode);
         callService("climate", "set_hvac_mode", entityId, {hvac_mode: mode});
     }
 
@@ -1675,6 +1680,29 @@ Singleton {
     // before cached HA values are allowed to override the optimistic state.
     // Structure: { "entityId": { optimisticState: "on", actualState: "off", actualAttributes: {}, timestamp: 123 } }
     property var pendingConfirmations: ({})
+
+    property var lastHvacModes: ({})
+
+    function rememberHvacMode(entityId, mode) {
+        if (mode && mode !== "off") {
+            var updated = Object.assign({}, lastHvacModes);
+            updated[entityId] = mode;
+            lastHvacModes = updated;
+        }
+    }
+
+    function getLastHvacMode(entityId, hvacModes) {
+        var remembered = lastHvacModes[entityId];
+        if (remembered && hvacModes.indexOf(remembered) !== -1)
+            return remembered;
+        if (hvacModes.indexOf("heat") !== -1)
+            return "heat";
+        for (var i = 0; i < hvacModes.length; i++) {
+            if (hvacModes[i] !== "off")
+                return hvacModes[i];
+        }
+        return "heat";
+    }
 
     signal optimisticStateChanged(string entityId, string key, var value)
     signal pendingConfirmationResolved(string entityId)  // New signal when 1s passes
